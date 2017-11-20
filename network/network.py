@@ -1,10 +1,11 @@
+import numpy as np
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
 from gensim.models import KeyedVectors
 from torch.autograd import Variable
-from torch.nn import Parameter, CrossEntropyLoss, BCEWithLogitsLoss
+from torch.nn import Parameter, MultiLabelSoftMarginLoss
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from dataset.VqaDataset import VqaDataset
@@ -65,10 +66,11 @@ if __name__ == '__main__':
     initial_weights = torch.from_numpy(fast_text[dataset.questions_vocab()])
     net = Network(dataset.questions_vocab_size, dataset.answers_vocab_size, initial_weights)
     net = nn.DataParallel(net).cuda()
-    criterion = BCEWithLogitsLoss().cuda()
+    criterion = MultiLabelSoftMarginLoss().cuda()
     optimizer = Adam(net.parameters(), lr=0.001).cuda()
     epochs = 40
     for epoch in range(epochs):
+        losses = []
         for batch, (question_indices, image_features, answer_indices) in enumerate(dataloader, 0):
             question_indices, image_features, answer_indices = Variable(question_indices.cuda()), Variable(
                 image_features.cuda()), Variable(answer_indices.cuda())
@@ -77,9 +79,10 @@ if __name__ == '__main__':
             loss = criterion(outputs, answer_indices)
             loss.backward()
             optimizer.step()
+            losses.append(loss.data.mean())
         save_checkpoint({
             'epoch': epoch + 1,
             'state_dict': net.state_dict(),
             'optimizer': optimizer.state_dict(),
         })
-        print("Epoch Finished")
+        print('[%d/%d] Loss: %.3f' % (epoch + 1, epochs, np.mean(losses)))
