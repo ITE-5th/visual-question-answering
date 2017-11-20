@@ -85,4 +85,4 @@ if __name__ == '__main__':
             'state_dict': net.state_dict(),
             'optimizer': optimizer.state_dict(),
         })
-        print('[%d/%d] Loss: %.3f' % (epoch + 1, epochs, np.mean(losses)))
+        print('[%d/%d] Loss: %.3f'.format(epoch + 1, epochs, np.mean(losses)))
