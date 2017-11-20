@@ -13,7 +13,7 @@ class GatedHyperbolicTangent(Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        stdv = 1. / math.sqrt(self.weight.size(1))
+        stdv = 1. / math.sqrt(self.w1.size(1))
         self.w1.data.uniform_(-stdv, stdv)
         self.b1.data.uniform_(-stdv, stdv)
         self.w2.data.uniform_(-2 * stdv, 1.5 * stdv)

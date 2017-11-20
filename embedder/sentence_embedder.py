@@ -17,7 +17,7 @@ class EmbeddingType(Enum):
 
 class SentenceEmbedder(Embedder):
     def __init__(self, file_path: str, embedding_type: EmbeddingType = EmbeddingType.FASTTEXT,
-                 max_sentence_length: int = 14):
+                 max_sentence_length: int = 18):
         """
         :param file_path: pretrained model file path
         :param embedding_type: the file embedding type
