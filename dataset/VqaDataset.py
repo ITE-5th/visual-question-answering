@@ -34,7 +34,10 @@ class VqaDataset(Dataset):
         question = self.questions[index]
         question_indices = [self.answers_words_to_indices[word] for word in question["question_toked"] if word not in string.punctuation]
         # TODO : wrong output
-        answers = [float(answer[1]) / 10 for answer in question["answers"]]
+        answers = [0] * len(self.answers_words_to_indices)
+        for answer in question["answers"]:
+            ind = self.answers_words_to_indices[answer[0]]
+            answers[ind] = float(answer[1]) / 10
         image_feature = self.images_features[int(question["image_id"])]
         return torch.LongTensor(question_indices), image_feature, torch.FloatTensor(answers)
 
