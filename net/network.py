@@ -1,15 +1,14 @@
 import numpy as np
 import torch
-import torch.autograd as autograd
 import torch.nn as nn
 import torch.nn.functional as F
 from gensim.models import KeyedVectors
 from torch.autograd import Variable
-from torch.nn import Parameter, MultiLabelSoftMarginLoss
+from torch.nn import Parameter, MultiLabelSoftMarginLoss, Dropout
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
-from dataset.VqaDataset import VqaDataset
+from dataset.vqa_dataset import VqaDataset
 from net.gated_hyperbolic_tangent import GatedHyperbolicTangent
 
 
@@ -23,11 +22,12 @@ class Network(nn.Module):
             self.embedding.weight.data.copy_(initial_embedding_weights)
         self.gru = nn.GRU(word_vector_length, 512)
         # image embedding weights
-        self.image_a = Parameter(torch.randn(image_location_number).view(image_location_number, 1))
+        self.image_attentions = Parameter(torch.randn(image_location_number).view(image_location_number, 1))
         # image GatedHyperbolicTangent
         self.ght1 = GatedHyperbolicTangent(512 + 2048, image_location_number)
         # question GatedHyperbolicTangent
         self.ght2 = GatedHyperbolicTangent(512, 512)
+        self.dropout = Dropout()
         # image attentions GatedHyperbolicTangent
         self.ght3 = GatedHyperbolicTangent(2048, 512)
         # output GatedHyperbolicTangent
@@ -37,10 +37,9 @@ class Network(nn.Module):
     def forward(self, question, image_features):
         question_vectors = self.embedding(question)
         print("question vectors shape = " + str(question_vectors.data.shape))
-        words_length = question_vectors.data.shape[0]
-        inputs = question_vectors.view(words_length, 1, question_vectors.data.shape[1])
-        hidden = autograd.Variable(torch.randn(1, 1, 512))
-        out, hidden = self.gru(inputs, hidden)
+        out, hidden = self.gru(question_vectors.permute(1, 0, 2))
+        hidden = hidden[-1]
+        print("hidden shape " + str(hidden.data.shape))
         question_embedding = hidden.view(-1, 512)
         question_embedding_mat = question_embedding.repeat(1, image_features.size(1)).view(-1, image_features.size(1),
                                                                                            512)
@@ -49,11 +48,13 @@ class Network(nn.Module):
         fusion_features = torch.cat((image_features, question_embedding_mat), -1)
         fusion_features = self.ght1(fusion_features)
         print("fusion feature 1 =" + str(fusion_features.data.shape))
-        fusion_features = fusion_features * self.image_a
-        attentions = F.softmax(fusion_features)
+        fusion_features = fusion_features * self.image_attentions.expand_as(fusion_features)
+        attentions = F.softmax(fusion_features.squeeze())
+        print("attentions shape = " + str(attentions.data.shape))
         v = torch.sum(image_features * attentions, 0, keepdim=True)
         print("v = " + str(v.data.shape))
-        h = self.ght2(question_embedding.view(512, 1)) * self.ght3(v)
+        h = self.ght2(question_embedding.view(-1, 512, 1)) * self.ght3(v)
+        h = self.dropout(h)
         h = self.ght4(h)
         h = self.output(h)
         s = F.sigmoid(h)
@@ -67,17 +68,18 @@ def save_checkpoint(state, filename='checkpoint.pth.tar'):
 if __name__ == '__main__':
     root_path = "/opt/vqa-data"
     dataset = VqaDataset(root_path)
-    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=8)
+    dataloader = DataLoader(dataset, batch_size=128, shuffle=True, num_workers=8)
+    print("questions number = " + str(len(dataset)))
     embedding_model_path = "/opt/vqa-data/wiki.en.genism"
     fast_text = KeyedVectors.load(embedding_model_path)
     # initial_weights = torch.from_numpy(fast_text[fast_text.wv.vocab])
-    initial_weights = torch.randn(dataset.questions_vocab_size, 300).cuda()
+    initial_weights = torch.randn(dataset.questions_vocab_size, 300)
     temp = dataset.questions_vocab()
     for i in range(len(temp)):
         try:
-            initial_weights[i, :] = torch.from_numpy(fast_text[temp[i]]).cuda()
+            initial_weights[i, :] = torch.from_numpy(fast_text[temp[i]])
         except:
-            initial_weights[i, :] = torch.randn(1, 300).cuda()
+            initial_weights[i, :] = torch.randn(1, 300)
     print("finish weight init")
     net = Network(dataset.questions_vocab_size, dataset.answers_vocab_size, initial_weights)
     net = nn.DataParallel(net).cuda()
