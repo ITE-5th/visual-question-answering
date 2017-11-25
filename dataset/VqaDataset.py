@@ -1,49 +1,71 @@
-import os
 import json
+import os
 import pickle
-import string
-import torch
+
 import numpy as np
+import torch
 from torch.utils.data.dataset import Dataset
-from multiprocessing import Pool, cpu_count
 
 
 class VqaDataset(Dataset):
-    def __init__(self, root_path: str):
-        self.images_path = root_path + "/images/"
-        image_ids = [path[:path.rfind(".")] for path in os.listdir(self.images_path)]
-        with Pool(cpu_count()) as p:
-            self.images_features = dict(p.map(self.extract_image_features, image_ids))
-        with open("../data/vqa_train_final.json", "r") as f:
-            self.questions = json.load(f)
-        with open("../data/train_q_dict.p", "rb") as f:
+    def __init__(self, root_path: str, question_length: int = 14):
+        self.question_length = question_length
+        with open("{}/train_q_dict.p".format(root_path), "rb") as f:
             temp = pickle.load(f)
             self.questions_indices_to_words = temp["itow"]
             self.questions_words_to_indices = temp["wtoi"]
             self.questions_vocab_size = len(temp["itow"])
-        with open("../data/train_a_dict.p", "rb") as f:
+        with open("{}/train_a_dict.p".format(root_path), "rb") as f:
             temp = pickle.load(f)
             self.answers_indices_to_words = temp["itow"]
             self.answers_words_to_indices = temp["wtoi"]
             self.answers_vocab_size = len(temp["itow"])
+        print("finish extraction of word to indices")
+        with open("{}/vqa_train_final.json".format(root_path), "r") as f:
+            self.questions = json.load(f)
+            # with Pool(cpu_count()) as p:
+            #     self.questions = p.map(self.extract_question_features, self.questions)
+            #     p.close()
+            #     p.join()
+            self.questions = [self.extract_question_features(question) for question in self.questions]
+        print("finish extraction of questions")
+        self.images_path = root_path + "/images/"
+        image_ids = [path[:path.rfind(".")] for path in os.listdir(self.images_path)]
+        # with Pool(cpu_count()) as p:
+        #     self.images_features = dict(p.map(self.extract_image_features, image_ids))
+        #     p.close()
+        #     p.join()
+        self.images_features = {image_id: self.extract_image_features(image_id) for image_id in image_ids}
+        print("finish extraction images")
 
     def __len__(self):
         return len(self.questions)
 
     def __getitem__(self, index):
         question = self.questions[index]
-        question_indices = [self.answers_words_to_indices[word] for word in question["question_toked"] if word not in string.punctuation]
-        # TODO : wrong output
-        answers = [0] * len(self.answers_words_to_indices)
-        for answer in question["answers"]:
+        image_feature = self.images_features[question[1]]
+        return question[0], image_feature, question[2]
+
+    def extract_question_features(self, question):
+        # print(question)
+        question_indices = [0] * self.question_length
+        for i, word in enumerate(question["question_toked"]):
+            try:
+                question_indices[i] = self.questions_words_to_indices[word]
+            except:
+                question_indices[i] = 0
+        answers = [0] * self.answers_vocab_size
+        for answer in question["answers_w_scores"]:
             ind = self.answers_words_to_indices[answer[0]]
-            answers[ind] = float(answer[1]) / 10
-        image_feature = self.images_features[int(question["image_id"])]
-        return torch.LongTensor(question_indices), image_feature, torch.FloatTensor(answers)
+            answers[ind] = float(answer[1])
+        return torch.LongTensor(question_indices), int(question["image_id"]), torch.FloatTensor(answers)
 
     def extract_image_features(self, image_id: str):
         arr = np.load(self.images_path + image_id + ".npy")
         return int(image_id), torch.from_numpy(arr)
 
     def questions_vocab(self):
-        return self.questions_words_to_indices.keys()
+        return list(self.questions_words_to_indices.keys())
+
+    def dispose(self):
+        del self.images_path, self.answers_words_to_indices, self.answers_indices_to_words, self.questions_indices_to_words, self.questions_words_to_indices, self.questions_vocab_size
