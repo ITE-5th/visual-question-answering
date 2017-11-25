@@ -35,7 +35,7 @@ class VqaDataset(Dataset):
         #     self.images_features = dict(p.map(self.extract_image_features, image_ids))
         #     p.close()
         #     p.join()
-        self.images_features = {image_id: self.extract_image_features(image_id) for image_id in image_ids}
+        self.images_features = {int(image_id): self.extract_image_features(image_id) for image_id in image_ids}
         print("finish extraction images")
 
     def __len__(self):
@@ -62,7 +62,7 @@ class VqaDataset(Dataset):
 
     def extract_image_features(self, image_id: str):
         arr = np.load(self.images_path + image_id + ".npy")
-        return int(image_id), torch.from_numpy(arr)
+        return torch.from_numpy(arr)
 
     def questions_vocab(self):
         return list(self.questions_words_to_indices.keys())
