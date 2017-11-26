@@ -1,10 +1,12 @@
+from multiprocessing import cpu_count
+
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from gensim.models import KeyedVectors
 from torch.autograd import Variable
-from torch.nn import Parameter, MultiLabelSoftMarginLoss, Dropout
+from torch.nn import MultiLabelSoftMarginLoss, GRU, Linear
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
@@ -12,53 +14,71 @@ from dataset.vqa_dataset import VqaDataset
 from net.gated_hyperbolic_tangent import GatedHyperbolicTangent
 
 
+def print_size(name, tensor):
+    print(name + " = " + str(tensor.size()))
+
+
 class Network(nn.Module):
     def __init__(self, question_vocab_size: int, answer_vocab_size: int, initial_embedding_weights=None,
                  word_vector_length: int = 300,
-                 image_location_number: int = 36):
+                 image_location_number: int = 36, image_features_size: int = 2048, embedding_size: int = 512):
         super().__init__()
+        self.image_location_number = image_location_number
+        self.embedding_size = embedding_size
         self.embedding = nn.Embedding(question_vocab_size, word_vector_length)
         if initial_embedding_weights is not None:
             self.embedding.weight.data.copy_(initial_embedding_weights)
-        self.gru = nn.GRU(word_vector_length, 512)
-        # image embedding weights
-        self.image_attentions = Parameter(torch.randn(image_location_number).view(image_location_number, 1))
-        # image GatedHyperbolicTangent
-        self.ght1 = GatedHyperbolicTangent(512 + 2048, image_location_number)
-        # question GatedHyperbolicTangent
-        self.ght2 = GatedHyperbolicTangent(512, 512)
-        self.dropout = Dropout()
-        # image attentions GatedHyperbolicTangent
-        self.ght3 = GatedHyperbolicTangent(2048, 512)
-        # output GatedHyperbolicTangent
-        self.ght4 = GatedHyperbolicTangent(512, 512)
-        self.output = nn.Linear(512, answer_vocab_size)
+        self.gru = GRU(word_vector_length, embedding_size)
+        # fusion feature ght
+        self.fusion_ght = GatedHyperbolicTangent(embedding_size + image_features_size, embedding_size)
+        self.attention_layer = Linear(embedding_size, 1)
+        # question ght
+        self.question_ght = GatedHyperbolicTangent(embedding_size, embedding_size)
+        # attention result ght
+        self.v_ght = GatedHyperbolicTangent(image_features_size, embedding_size)
+        # output ght
+        self.output_ght = GatedHyperbolicTangent(embedding_size, embedding_size)
+        # output
+        self.output = Linear(embedding_size, answer_vocab_size)
 
-    def forward(self, question, image_features):
-        question_vectors = self.embedding(question)
-        print("question vectors shape = " + str(question_vectors.data.shape))
+    def forward(self, question, image):
+        # sentence embedding
+        question_vectors = self.embedding(
+            question)  # size = (batch size, max sentence length, word_vector_length = 300)
         out, hidden = self.gru(question_vectors.permute(1, 0, 2))
-        hidden = hidden[-1]
-        print("hidden shape " + str(hidden.data.shape))
-        question_embedding = hidden.view(-1, 512)
-        question_embedding_mat = question_embedding.repeat(1, image_features.size(1)).view(-1, image_features.size(1),
-                                                                                           512)
-        print("question embedding shape = " + str(question_embedding_mat.data.shape))
-        image_features = F.normalize(image_features, -1)
-        fusion_features = torch.cat((image_features, question_embedding_mat), -1)
-        fusion_features = self.ght1(fusion_features)
-        print("fusion feature 1 =" + str(fusion_features.data.shape))
-        fusion_features = fusion_features * self.image_attentions.expand_as(fusion_features)
-        attentions = F.softmax(fusion_features.squeeze())
-        print("attentions shape = " + str(attentions.data.shape))
-        v = torch.sum(image_features * attentions, 0, keepdim=True)
-        print("v = " + str(v.data.shape))
-        h = self.ght2(question_embedding.view(-1, 512, 1)) * self.ght3(v)
-        h = self.dropout(h)
-        h = self.ght4(h)
-        h = self.output(h)
-        s = F.sigmoid(h)
-        return s
+        hidden = hidden[-1]  # size = (batch size, embedding size = 512)
+        # print_size("hidden", hidden)
+        # image embedding
+        image = F.normalize(image, -1)
+
+        # concat
+        hidden_mat = hidden.repeat(1,
+                                   self.image_location_number)  # size = (batch size, image location number * embedding size)
+        hidden_mat = hidden_mat.view(-1, self.image_location_number,
+                                     self.embedding_size)  # size = (batch size, image location number, embedding size)
+        fusion_features = torch.cat((image, hidden_mat),
+                                    -1)  # size = (batch size, image location number, embedding size + image features size)
+        # print_size("fusion features1", fusion_features)
+        fusion_features = self.fusion_ght(fusion_features)  # size = (batch size, image location number, embedding size)
+        # print_size("fusion features2", fusion_features)
+        # attentions
+        attentions = self.attention_layer(fusion_features)
+        attentions = F.softmax(attentions.squeeze())  # size = (batch size, image location number)
+        temp = attentions.unsqueeze(1)
+        v = torch.bmm(temp, image).squeeze()
+        # print_size("v", v)
+        # joint
+        v = self.v_ght(v)
+        q = self.question_ght(hidden)
+        # can be replaced with *
+        h = torch.mul(q, v)  # size = (batch size, embedding size)
+        # print_size("h", h)
+        # output
+        result = self.output_ght(h)
+        result = self.output(result)
+        result = F.sigmoid(result)
+        # print_size("result", result)
+        return result
 
 
 def save_checkpoint(state, filename='checkpoint.pth.tar'):
@@ -67,8 +87,9 @@ def save_checkpoint(state, filename='checkpoint.pth.tar'):
 
 if __name__ == '__main__':
     root_path = "/opt/vqa-data"
+    batch_size = 256
     dataset = VqaDataset(root_path)
-    dataloader = DataLoader(dataset, batch_size=128, shuffle=True, num_workers=8)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=cpu_count())
     print("questions number = " + str(len(dataset)))
     embedding_model_path = "/opt/vqa-data/wiki.en.genism"
     fast_text = KeyedVectors.load(embedding_model_path)
@@ -77,17 +98,16 @@ if __name__ == '__main__':
     temp = dataset.questions_vocab()
     for i in range(len(temp)):
         try:
-            initial_weights[i, :] = torch.from_numpy(fast_text[temp[i]])
+            initial_weights[i, :] = torch.from_numpy(fast_text[temp[i]]).view(1, 300)
         except:
             initial_weights[i, :] = torch.randn(1, 300)
     print("finish weight init")
     net = Network(dataset.questions_vocab_size, dataset.answers_vocab_size, initial_weights)
-    net = nn.DataParallel(net).cuda()
+    net = net.cuda()
     criterion = MultiLabelSoftMarginLoss().cuda()
     optimizer = Adam(net.parameters(), lr=0.001)
     epochs = 20
-    dataset.dispose()
-    del fast_text
+    print("begin training")
     for epoch in range(epochs):
         losses = []
         for batch, (questions, image_features, answers) in enumerate(dataloader, 0):
@@ -99,6 +119,7 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
             losses.append(loss.data.mean())
+            # print("finish batch number = {}".format(batch))
         save_checkpoint({
             'epoch': epoch + 1,
             'state_dict': net.state_dict(),
