@@ -1,6 +1,7 @@
 # Project
 
 data
+models
 
 # Pycharm
 .idea/workspace.xml

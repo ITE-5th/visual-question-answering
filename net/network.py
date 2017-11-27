@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from gensim.models import KeyedVectors
 from torch.autograd import Variable
-from torch.nn import MultiLabelSoftMarginLoss, GRU, Linear
+from torch.nn import MultiLabelSoftMarginLoss, GRU, Linear, Embedding
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
@@ -25,7 +25,7 @@ class Network(nn.Module):
         super().__init__()
         self.image_location_number = image_location_number
         self.embedding_size = embedding_size
-        self.embedding = nn.Embedding(question_vocab_size, word_vector_length)
+        self.embedding = Embedding(question_vocab_size, word_vector_length)
         if initial_embedding_weights is not None:
             self.embedding.weight.data.copy_(initial_embedding_weights)
         self.gru = GRU(word_vector_length, embedding_size)
@@ -49,8 +49,7 @@ class Network(nn.Module):
         hidden = hidden[-1]  # size = (batch size, embedding size = 512)
         # print_size("hidden", hidden)
         # image embedding
-        image = F.normalize(image, -1)
-
+        image = F.normalize(image, dim=-1)
         # concat
         hidden_mat = hidden.repeat(1,
                                    self.image_location_number)  # size = (batch size, image location number * embedding size)
@@ -65,7 +64,7 @@ class Network(nn.Module):
         attentions = self.attention_layer(fusion_features)
         attentions = F.softmax(attentions.squeeze())  # size = (batch size, image location number)
         temp = attentions.unsqueeze(1)
-        v = torch.bmm(temp, image).squeeze()
+        v = torch.bmm(temp, image).squeeze()  # size = (batch size, image features size)
         # print_size("v", v)
         # joint
         v = self.v_ght(v)
@@ -81,32 +80,32 @@ class Network(nn.Module):
         return result
 
 
-def save_checkpoint(state, filename='checkpoint.pth.tar'):
-    torch.save(state, filename)
+def save_checkpoint(state, epoch: int, directory: str = '../models'):
+    torch.save(state, "{}/epoch-{}-checkpoint.pth.tar".format(directory, epoch + 1))
 
 
 if __name__ == '__main__':
     root_path = "/opt/vqa-data"
-    batch_size = 256
+    batch_size = 2048
     dataset = VqaDataset(root_path)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=cpu_count())
     print("questions number = " + str(len(dataset)))
     embedding_model_path = "/opt/vqa-data/wiki.en.genism"
     fast_text = KeyedVectors.load(embedding_model_path)
     # initial_weights = torch.from_numpy(fast_text[fast_text.wv.vocab])
-    initial_weights = torch.randn(dataset.questions_vocab_size, 300)
+    initial_weights = torch.randn(dataset.questions_vocab_size + 1, 300)
     temp = dataset.questions_vocab()
     for i in range(len(temp)):
         try:
-            initial_weights[i, :] = torch.from_numpy(fast_text[temp[i]]).view(1, 300)
+            initial_weights[i + 1, :] = torch.from_numpy(fast_text[temp[i]]).view(1, 300)
         except:
-            initial_weights[i, :] = torch.randn(1, 300)
+            initial_weights[i + 1, :] = torch.randn(1, 300)
     print("finish weight init")
-    net = Network(dataset.questions_vocab_size, dataset.answers_vocab_size, initial_weights)
-    net = net.cuda()
+    net = Network(dataset.questions_vocab_size + 1, dataset.answers_vocab_size, initial_weights)
+    net = nn.DataParallel(net).cuda()
     criterion = MultiLabelSoftMarginLoss().cuda()
     optimizer = Adam(net.parameters(), lr=0.001)
-    epochs = 20
+    epochs = 100
     print("begin training")
     for epoch in range(epochs):
         losses = []
@@ -119,10 +118,10 @@ if __name__ == '__main__':
             loss.backward()
             optimizer.step()
             losses.append(loss.data.mean())
-            # print("finish batch number = {}".format(batch))
+            print("finish batch number = {}".format(batch + 1))
         save_checkpoint({
             'epoch': epoch + 1,
             'state_dict': net.state_dict(),
             'optimizer': optimizer.state_dict(),
-        })
+        }, epoch)
         print('[{}/{}] Loss: {}'.format(epoch + 1, epochs, np.mean(losses)))

@@ -55,13 +55,15 @@ class VqaDataset(Dataset):
             except:
                 question_indices[i] = 0
         answers = [0] * self.answers_vocab_size
-        for answer in question["answers_w_scores"]:
-            ind = self.answers_words_to_indices[answer[0]]
-            answers[ind] = float(answer[1])
+        for word, score in question["answers_w_scores"]:
+            ind = self.answers_words_to_indices[word]
+            answers[ind] = float(score)
         return torch.LongTensor(question_indices), int(question["image_id"]), torch.FloatTensor(answers)
 
     def extract_image_features(self, image_id: str):
         arr = np.load(self.images_path + image_id + ".npy")
+        if arr.shape != (36, 2048):
+            print("what the fuck")
         return torch.from_numpy(arr)
 
     def questions_vocab(self):
