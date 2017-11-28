@@ -1,3 +1,4 @@
+import os
 from multiprocessing import cpu_count
 
 import numpy as np
@@ -6,7 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from gensim.models import KeyedVectors
 from torch.autograd import Variable
-from torch.nn import MultiLabelSoftMarginLoss, GRU, Linear, Embedding
+from torch.nn import MultiLabelSoftMarginLoss, GRU, Linear, Embedding, DataParallel
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
@@ -16,6 +17,17 @@ from net.gated_hyperbolic_tangent import GatedHyperbolicTangent
 
 def print_size(name, tensor):
     print(name + " = " + str(tensor.size()))
+
+
+def create_batch_dir(batch_size: int, base_dir: str = "../models"):
+    path = "{}/batch-{}-models".format(base_dir, batch_size)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    return path
+
+
+def save_checkpoint(state, epoch: int, directory: str = '../models'):
+    torch.save(state, "{}/epoch-{}-checkpoint.pth.tar".format(directory, epoch + 1))
 
 
 class Network(nn.Module):
@@ -80,13 +92,10 @@ class Network(nn.Module):
         return result
 
 
-def save_checkpoint(state, epoch: int, directory: str = '../models'):
-    torch.save(state, "{}/epoch-{}-checkpoint.pth.tar".format(directory, epoch + 1))
-
-
 if __name__ == '__main__':
     root_path = "/opt/vqa-data"
-    batch_size = 2048
+    batch_size = 512
+    base_dir = create_batch_dir(batch_size)
     dataset = VqaDataset(root_path)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=cpu_count())
     print("questions number = " + str(len(dataset)))
@@ -102,7 +111,7 @@ if __name__ == '__main__':
             initial_weights[i + 1, :] = torch.randn(1, 300)
     print("finish weight init")
     net = Network(dataset.questions_vocab_size + 1, dataset.answers_vocab_size, initial_weights)
-    net = nn.DataParallel(net).cuda()
+    net = DataParallel(net).cuda()
     criterion = MultiLabelSoftMarginLoss().cuda()
     optimizer = Adam(net.parameters(), lr=0.001)
     epochs = 100
@@ -123,5 +132,5 @@ if __name__ == '__main__':
             'epoch': epoch + 1,
             'state_dict': net.state_dict(),
             'optimizer': optimizer.state_dict(),
-        }, epoch)
+        }, epoch, base_dir)
         print('[{}/{}] Loss: {}'.format(epoch + 1, epochs, np.mean(losses)))
