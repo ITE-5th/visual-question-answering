@@ -1,6 +1,5 @@
 from multiprocessing import cpu_count
 
-import time
 import torch
 from torch.autograd import Variable
 from torch.nn import MultiLabelSoftMarginLoss
