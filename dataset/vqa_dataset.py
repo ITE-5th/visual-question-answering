@@ -8,33 +8,26 @@ from torch.utils.data.dataset import Dataset
 
 
 class VqaDataset(Dataset):
-    def __init__(self, root_path: str, question_length: int = 14):
+    def __init__(self, root_path: str, training: bool = True, question_length: int = 14):
+        self.training = training
         self.question_length = question_length
         with open("{}/train_q_dict.p".format(root_path), "rb") as f:
             temp = pickle.load(f)
             self.questions_indices_to_words = temp["itow"]
             self.questions_words_to_indices = temp["wtoi"]
-            self.questions_vocab_size = len(temp["itow"])
+            self.questions_vocab_size = len(self.questions_indices_to_words)
         with open("{}/train_a_dict.p".format(root_path), "rb") as f:
             temp = pickle.load(f)
             self.answers_indices_to_words = temp["itow"]
             self.answers_words_to_indices = temp["wtoi"]
-            self.answers_vocab_size = len(temp["itow"])
+            self.answers_vocab_size = len(self.answers_indices_to_words)
         print("finish extraction of word to indices")
-        with open("{}/vqa_train_final.json".format(root_path), "r") as f:
+        with open("{}/vqa_{}_final.json".format(root_path, "train" if training else "val"), "r") as f:
             self.questions = json.load(f)
-            # with Pool(cpu_count()) as p:
-            #     self.questions = p.map(self.extract_question_features, self.questions)
-            #     p.close()
-            #     p.join()
             self.questions = [self.extract_question_features(question) for question in self.questions]
         print("finish extraction of questions")
         self.images_path = root_path + "/images/"
         image_ids = [path[:path.rfind(".")] for path in os.listdir(self.images_path)]
-        # with Pool(cpu_count()) as p:
-        #     self.images_features = dict(p.map(self.extract_image_features, image_ids))
-        #     p.close()
-        #     p.join()
         self.images_features = {int(image_id): self.extract_image_features(image_id) for image_id in image_ids}
         print("finish extraction images")
 
@@ -55,7 +48,8 @@ class VqaDataset(Dataset):
             except:
                 question_indices[i] = 0
         answers = [0] * self.answers_vocab_size
-        for word, score in question["answers_w_scores"]:
+        temp = question["answers_w_scores"]
+        for word, score in temp:
             ind = self.answers_words_to_indices[word]
             answers[ind] = float(score)
         return torch.LongTensor(question_indices), int(question["image_id"]), torch.FloatTensor(answers)
@@ -66,8 +60,33 @@ class VqaDataset(Dataset):
             print("what the fuck")
         return torch.from_numpy(arr)
 
+    def number_of_questions(self):
+        return len(self.questions)
+
     def questions_vocab(self):
         return list(self.questions_words_to_indices.keys())
 
     def dispose(self):
         del self.images_path, self.answers_words_to_indices, self.answers_indices_to_words, self.questions_indices_to_words, self.questions_words_to_indices, self.questions_vocab_size
+
+    @staticmethod
+    def load_eval_info(root_dir: str):
+        res = {}
+        with open("{}/train_q_dict.p".format(root_dir), "rb") as f:
+            temp = pickle.load(f)
+            t = temp["wtoi"].keys()
+            res["question_vocab"] = list(t)
+            res["question_vocab_size"] = len(t)
+        with open("{}/train_a_dict.p".format(root_dir), "rb") as f:
+            temp = pickle.load(f)
+            t = temp["wtoi"].keys()
+            res["answer_vocab"] = list(t)
+            res["answer_vocab_size"] = len(t)
+        return res
+
+    def load_info(self):
+        info = {"question_vocab_size": self.questions_vocab_size,
+                "question_vocab": list(self.questions_words_to_indices.keys()),
+                "answer_vocab_size": self.answers_vocab_size,
+                "answer_vocab": list(self.answers_words_to_indices.keys())}
+        return info
