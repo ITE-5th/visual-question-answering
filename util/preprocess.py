@@ -4,9 +4,40 @@ import os
 import pickle
 
 # from nltk.tokenize import StanfordTokenizer
+import torch
 from tqdm import tqdm
 
+from dataset.vqa_dataset import VqaDataset
+
 base_path = "../data/"
+
+
+def download_vocab_images(root_dir: str, vocabs, number_of_images: int = 10):
+    path = "{}/output_vocab_images".format(root_dir)
+    if not os.path.exists(path):
+        os.makedirs(path)
+    for vocab in vocabs:
+        vocab_path = "{}/{}".format(path, vocab)
+        if not os.path.exists(vocab_path):
+            os.makedirs(vocab_path)
+        os.system("cd {};google-images-download download '{}' --download-limit {} ".format(vocab_path, vocab, number_of_images))
+
+
+def print_size(name, tensor):
+    print(name + " = " + str(tensor.size()))
+
+
+def save_checkpoint(state, epoch: int, directory: str = '../models'):
+    torch.save(state, "{}/epoch-{}-checkpoint.pth.tar".format(directory, epoch + 1))
+
+
+def to_module(state_dict):
+    new_state_dict = dict()
+    for key in state_dict.keys():
+        new_name = key[key.index(".") + 1:]
+        new_state_dict[new_name] = state_dict[key]
+    return new_state_dict
+
 
 def process_a(q, phase):
     counts = {}
@@ -64,7 +95,8 @@ def process_q(q):
         vocab = [w for w, n in list(counts.items()) if n > count_thr]
         bad_count = sum(counts[w] for w in bad_words)
         print((
-            'number of bad words: %d/%d = %.2f%%' % (len(bad_words), len(counts), len(bad_words) * 100.0 / len(counts))))
+                'number of bad words: %d/%d = %.2f%%' % (
+            len(bad_words), len(counts), len(bad_words) * 100.0 / len(counts))))
         print(('number of words in vocab would be %d' % (len(vocab),)))
         print(('number of UNKs: %d/%d = %.2f%%' % (bad_count, total_words, bad_count * 100.0 / total_words)))
 
@@ -135,14 +167,17 @@ if __name__ == '__main__':
     #     val_a = json.load(open('raw/v2_mscoco_val2014_annotations.json'))
     #     combine_qa(val_q, val_a['annotations'], 'val')
 
-    if not os.path.exists(base_path + 'vqa_train_final.json'):
-        print('Building train dictionary...')
-        train = json.load(open(base_path + 'vqa_train_toked.json'))
-        process_q(train)
-        process_a(train, 'train')
-
-    if not os.path.exists(base_path + 'vqa_val_final.json'):
-        print('Building val dictionary...')
-        val = json.load(open(base_path + 'vqa_val_toked.json'))
-        process_a(val, 'val')
-    print('Done')
+    # if not os.path.exists(base_path + 'vqa_train_final.json'):
+    #     print('Building train dictionary...')
+    #     train = json.load(open(base_path + 'vqa_train_toked.json'))
+    #     process_q(train)
+    #     process_a(train, 'train')
+    #
+    # if not os.path.exists(base_path + 'vqa_val_final.json'):
+    #     print('Building val dictionary...')
+    #     val = json.load(open(base_path + 'vqa_val_toked.json'))
+    #     process_a(val, 'val')
+    # print('Done')
+    root_dir = "../data"
+    vocabs = VqaDataset.load_answers_vocab(root_dir)
+    download_vocab_images(root_dir, vocabs)
