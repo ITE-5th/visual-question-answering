@@ -15,7 +15,6 @@ from embedder.image_embedder import ImageEmbedder
 from embedder.sentence_embedder import SentenceEmbedder
 from net.gated_hyperbolic_tangent import GatedHyperbolicTangent
 from util.preprocess import to_module, save_checkpoint
-from util.vocab_images_features_extractor import VocabImagesFeaturesExtractor
 
 
 def create_batch_dir(batch_size: int, base_dir: str = "../models"):
@@ -65,6 +64,7 @@ def load_words_embed(pretrained_embed_model, vocab) -> torch.FloatTensor:
 
 
 def load_words_images(root_path: str, vocabs) -> torch.FloatTensor:
+    from util.vocab_images_features_extractor import VocabImagesFeaturesExtractor
     extractor = VocabImagesFeaturesExtractor()
     return extractor.load(root_path, vocabs)
 
@@ -94,10 +94,12 @@ class Network(nn.Module):
         self.dropout = Dropout()
         self.output_modified = initial_output_embed_weights is not None
         if self.output_modified:
-            self.output_image_ght = GatedHyperbolicTangent(2048, embedding_size)
-            self.output_image = Linear(embedding_size, answer_vocab_size)
-            self.output_text_ght = GatedHyperbolicTangent(300, embedding_size)
-            self.output_text = Linear(embedding_size, answer_vocab_size)
+            self.output_image_ght = GatedHyperbolicTangent(embedding_size, 2048)
+            self.output_image = Linear(2048, answer_vocab_size)
+            self.output_image.weight.copy_(initial_output_images_weights)
+            self.output_text_ght = GatedHyperbolicTangent(embedding_size, 300)
+            self.output_text = Linear(300, answer_vocab_size)
+            self.output_text.weight.copy_(initial_output_embed_weights)
         else:
             # output
             self.output = Linear(embedding_size, answer_vocab_size)
@@ -161,8 +163,7 @@ if __name__ == '__main__':
     embedding_model_path = "/opt/vqa-data/wiki.en.genism"
     fast_text = KeyedVectors.load(embedding_model_path)
     initial_embed_weights = load_words_embed(fast_text, dataset.questions_vocab())
-    initial_output_weights = None
-    initial_output_images_weights = None
+    initial_output_weights, initial_output_images_weights = None, None
     print("finish weight init")
     if modified_output:
         initial_output_weights = load_words_embed(fast_text, dataset.answers_vocab())
