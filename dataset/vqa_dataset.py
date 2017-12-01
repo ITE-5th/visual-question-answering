@@ -8,7 +8,7 @@ from torch.utils.data.dataset import Dataset
 
 
 class VqaDataset(Dataset):
-    def __init__(self, root_path: str, soft_max : bool = False, training: bool = True, question_length: int = 14):
+    def __init__(self, root_path: str, soft_max: bool = False, training: bool = True, question_length: int = 14):
         self.soft_max = soft_max
         self.training = training
         self.question_length = question_length
@@ -57,7 +57,7 @@ class VqaDataset(Dataset):
             answers = torch.FloatTensor(answers)
         else:
             try:
-                answers = self.answers_words_to_indices[question["answer"]]
+                answers = self.answers_words_to_indices[question["answer"]] + 1
             except:
                 answers = 0
         return torch.LongTensor(question_indices), int(question["image_id"]), answers
@@ -94,7 +94,7 @@ class VqaDataset(Dataset):
         return res
 
     @staticmethod
-    def load_answers_vocab(root_dir:str):
+    def load_answers_vocab(root_dir: str):
         with open("{}/train_a_dict.p".format(root_dir), "rb") as f:
             temp = pickle.load(f)
             return list(temp["wtoi"].keys())
@@ -105,4 +105,3 @@ class VqaDataset(Dataset):
                 "answer_vocab_size": self.answers_vocab_size,
                 "answer_vocab": list(self.answers_words_to_indices.keys())}
         return info
-
