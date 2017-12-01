@@ -20,7 +20,9 @@ def download_vocab_images(root_dir: str, vocabs, number_of_images: int = 10):
         vocab_path = "{}/{}".format(path, vocab)
         if not os.path.exists(vocab_path):
             os.makedirs(vocab_path)
-        os.system("cd {};google-images-download download '{}' --download-limit {} ".format(vocab_path, vocab, number_of_images))
+        os.system(
+            "cd {};google-images-download download '{}' --download-limit {} --no-clobber".format(vocab_path, vocab,
+                                                                                                 number_of_images))
 
 
 def print_size(name, tensor):
