@@ -3,11 +3,12 @@ from multiprocessing import cpu_count
 
 import torch
 import torch.nn as nn
+from torch.cuda import manual_seed
 import torch.nn.functional as F
 from gensim.models import KeyedVectors
 from torch.autograd import Variable
 from torch.nn import GRU, Linear, Embedding, DataParallel, BCEWithLogitsLoss, CrossEntropyLoss, Dropout
-from torch.optim import Adadelta
+from torch.optim import Adam
 from torch.utils.data import DataLoader
 
 from dataset.vqa_dataset import VqaDataset
@@ -54,12 +55,12 @@ def predict(net, info, question, image_path):
 
 def load_words_embed(pretrained_embed_model, vocab) -> torch.FloatTensor:
     l = len(vocab)
-    embeds = torch.randn(l + 1, 300)
+    embeds = torch.zeros(l + 1, 300)
     for i in range(l):
         try:
             embeds[i + 1, :] = torch.from_numpy(pretrained_embed_model[vocab[i]]).view(1, 300)
         except:
-            embeds[i + 1, :] = torch.randn(1, 300)
+            embeds[i + 1, :] = torch.zeros(1, 300)
     return embeds
 
 
@@ -91,7 +92,7 @@ class Network(nn.Module):
         self.v_ght = GatedHyperbolicTangent(image_features_size, embedding_size)
         # output ght
         self.output_ght = GatedHyperbolicTangent(embedding_size, embedding_size)
-        self.dropout = Dropout()
+        self.dropout = Dropout(p=0.2)
         self.output_modified = initial_output_embed_weights is not None
         if self.output_modified:
             self.output_image_ght = GatedHyperbolicTangent(embedding_size, 2048)
@@ -113,7 +114,7 @@ class Network(nn.Module):
         # print_size("hidden", hidden)
         # image embedding
         # dim = -1 ?
-        image = F.normalize(image, -1)
+        image = F.normalize(image)
         # concat
         hidden_mat = hidden.repeat(1,
                                    self.image_location_number)  # size = (batch size, image location number * embedding size)
@@ -152,28 +153,30 @@ class Network(nn.Module):
 
 
 if __name__ == '__main__':
+    manual_seed(1000)
     root_path = "/opt/vqa-data"
-    soft_max = True
-    modified_output = False
+    soft_max, modified_output, glove = True, False, True
     batch_size = 512
     base_dir = create_batch_dir(batch_size)
     dataset = VqaDataset(root_path, soft_max)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=cpu_count())
     print("questions number = " + str(len(dataset)))
-    embedding_model_path = "/opt/vqa-data/wiki.en.genism"
-    fast_text = KeyedVectors.load(embedding_model_path)
-    initial_embed_weights = load_words_embed(fast_text, dataset.questions_vocab())
+    embedding_model_path = "/opt/vqa-data/wiki.en.genism" if not glove else "/opt/vqa-data/gensim_glove_vectors.txt"
+    embedding_model = KeyedVectors.load(embedding_model_path) if not glove else KeyedVectors.load_word2vec_format(
+        embedding_model_path)
+    initial_embed_weights = load_words_embed(embedding_model, dataset.questions_vocab())
     initial_output_weights, initial_output_images_weights = None, None
     print("finish weight init")
     if modified_output:
-        initial_output_weights = load_words_embed(fast_text, dataset.answers_vocab())
-        initial_output_images_weights = load_words_images(root_path, dataset.answers_vocab())
+        t = dataset.answers_vocab()
+        initial_output_weights = load_words_embed(embedding_model, t)
+        initial_output_images_weights = load_words_images(root_path, t)
     net = Network(soft_max, dataset.questions_vocab_size + 1, dataset.answers_vocab_size + 1, initial_embed_weights,
                   initial_output_embed_weights=initial_output_weights,
                   initial_output_images_weights=initial_output_images_weights)
     net = DataParallel(net).cuda()
     criterion = (BCEWithLogitsLoss() if not soft_max else CrossEntropyLoss()).cuda()
-    optimizer = Adadelta(net.parameters(), lr=0.01)
+    optimizer = Adam(net.parameters(), lr=0.01)
     epochs = 100
     print("begin training")
     batches = dataset.number_of_questions() / batch_size
@@ -198,7 +201,9 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            print("finish batch number = {}".format(batch + 1))
+            if batch % 40 == 0:
+                print('Epoch %02d(%03d/%03d), loss: %.3f, correct: %3d / %d (%.2f%%)' %
+                      (epoch + 1, batch, batches, loss.data[0], correct, batch_size, correct * 100 / batch_size))
         save_checkpoint({
             'epoch': epoch + 1,
             'state_dict': net.state_dict(),
