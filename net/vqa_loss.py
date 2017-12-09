@@ -1,4 +1,3 @@
-import torch.nn.functional as F
 from torch.autograd import Variable
 from torch.nn import Module
 
@@ -20,7 +19,8 @@ def binary_cross_entropy_with_logits_minus(input, target, weight=None, size_aver
     if not (target.size() == input.size()):
         raise ValueError("Target size ({}) must be the same as input size ({})".format(target.size(), input.size()))
     max_val = (-input).clamp(min=0)
-    loss = input - input * target + max_val - ((-max_val).exp() + (-input - max_val).exp()).log()
+    # loss = input - input * target + max_val - ((-max_val).exp() + (-input - max_val).exp()).log()
+    loss = -input + input * target + max_val + (2 * target - 1)((-max_val).exp() + (-input - max_val).exp()).log()
 
     if weight is not None:
         loss = loss * weight
@@ -29,7 +29,6 @@ def binary_cross_entropy_with_logits_minus(input, target, weight=None, size_aver
         return loss.mean()
     else:
         return loss.sum()
-
 
 # = -[z * log(y) - (1-z) * log(1-y)]
 # = z * log(1 + exp(-x)) + (1-z) * [-x - log(1 + exp(-x))]
