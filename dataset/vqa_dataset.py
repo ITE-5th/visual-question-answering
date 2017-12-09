@@ -1,16 +1,24 @@
 import json
 import os
 import pickle
+from enum import Enum
 
 import numpy as np
 import torch
 from torch.utils.data.dataset import Dataset
 
 
+class DataType(Enum):
+    TRAIN = 0,
+    TEST = 1,
+    ALL = 2
+
+
 class VqaDataset(Dataset):
-    def __init__(self, root_path: str, soft_max: bool = False, training: bool = True, question_length: int = 14):
+    def __init__(self, root_path: str, soft_max: bool = False, type: DataType = DataType.TRAIN,
+                 question_length: int = 14):
         self.soft_max = soft_max
-        self.training = training
+        self.type = type
         self.question_length = question_length
         with open("{}/train_q_dict.p".format(root_path), "rb") as f:
             temp = pickle.load(f)
@@ -23,10 +31,19 @@ class VqaDataset(Dataset):
             self.answers_words_to_indices = temp["wtoi"]
             self.answers_vocab_size = len(self.answers_indices_to_words)
         print("finish word to indices extraction")
-        with open("{}/vqa_{}_final.json".format(root_path, "train" if training else "val"), "r") as f:
-            self.questions = json.load(f)
-            self.questions = [self.extract_question_features(question) for question in self.questions]
+        if self.type == DataType.TRAIN or self.type == DataType.TRAIN:
+            with open("{}/vqa_{}_final.json".format(root_path, "train" if type == DataType.TRAIN else "val"), "r") as f:
+                self.questions = json.load(f)
+                self.questions = [self.extract_question_features(question) for question in self.questions]
+        else:
+            with open("{}/vqa_train_final.json".format(root_path), "r") as f:
+                temp = json.load(f)
+                self.questions = [self.extract_question_features(question) for question in temp]
+            with open("{}/vqa_val_final.json".format(root_path), "r") as f:
+                temp = json.load(f)
+                self.questions += [self.extract_question_features(question) for question in temp]
         print("finish questions extraction")
+        print("questions = {}".format(len(self.questions)))
         self.images_path = root_path + "/images/"
         image_ids = [path[:path.rfind(".")] for path in os.listdir(self.images_path)]
         self.images_features = {int(image_id): self.extract_image_features(image_id) for image_id in image_ids}
@@ -41,7 +58,6 @@ class VqaDataset(Dataset):
         return question[0], image_feature, question[2]
 
     def extract_question_features(self, question):
-        # print(question)
         question_indices = [0] * self.question_length
         for i, word in enumerate(question["question_toked"]):
             try:

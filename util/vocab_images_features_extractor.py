@@ -9,7 +9,7 @@ from torch.nn import Sequential
 from dataset.vqa_dataset import VqaDataset
 
 model = torch.load("../data/resnet101.pth").cuda()
-
+model.eval()
 for param in model.parameters():
     param.requires_grad = False
 model = Sequential(*list(model.modules())[:-1])

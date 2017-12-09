@@ -13,7 +13,7 @@ if __name__ == '__main__':
     root_path = "/opt/vqa-data"
     model_path = "../models/batch-512-models/epoch-100-checkpoint.pth.tar"
     batch_size = 2048
-    dataset = VqaDataset(root_path, soft_max)
+    dataset = VqaDataset(root_path)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=cpu_count())
     info = dataset.load_info()
     net = load(model_path, soft_max, info)

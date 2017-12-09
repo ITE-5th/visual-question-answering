@@ -3,15 +3,15 @@ from multiprocessing import cpu_count
 
 import torch
 import torch.nn as nn
-from torch.cuda import manual_seed
 import torch.nn.functional as F
 from gensim.models import KeyedVectors
 from torch.autograd import Variable
-from torch.nn import GRU, Linear, Embedding, DataParallel, BCEWithLogitsLoss, CrossEntropyLoss, Dropout
+from torch.cuda import manual_seed
+from torch.nn import GRU, Linear, Embedding, DataParallel, Dropout, BatchNorm1d, BCEWithLogitsLoss, CrossEntropyLoss
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
-from dataset.vqa_dataset import VqaDataset
+from dataset.vqa_dataset import VqaDataset, DataType
 from embedder.image_embedder import ImageEmbedder
 from embedder.sentence_embedder import SentenceEmbedder
 from net.gated_hyperbolic_tangent import GatedHyperbolicTangent
@@ -25,11 +25,11 @@ def create_batch_dir(batch_size: int, base_dir: str = "../models"):
     return path
 
 
-def load(model_path: str, soft_max: bool, info, use_cuda=True):
+def load(model_path: str, info, use_cuda=True):
     state = torch.load(model_path)
     state = state["state_dict"]
     state = to_module(state)
-    net = Network(soft_max, info["question_vocab_size"] + 1, info["answer_vocab_size"] + 1)
+    net = Network(info["question_vocab_size"] + 1, info["answer_vocab_size"] + 1)
     net.load_state_dict(state)
     net = DataParallel(net)
     if use_cuda:
@@ -71,15 +71,15 @@ def load_words_images(root_path: str, vocabs) -> torch.FloatTensor:
 
 
 class Network(nn.Module):
-    def __init__(self, soft_max: bool, question_vocab_size: int, answer_vocab_size: int, initial_embedding_weights=None,
+    def __init__(self, question_vocab_size: int, answer_vocab_size: int, initial_embedding_weights=None,
                  word_vector_length: int = 300,
                  image_location_number: int = 36, image_features_size: int = 2048, embedding_size: int = 512,
-                 initial_output_embed_weights=None, initial_output_images_weights=None):
+                 initial_output_embed_weights=None, initial_output_images_weights=None, reg: bool = True):
         super().__init__()
-        self.soft_max = soft_max
         self.image_location_number = image_location_number
         self.embedding_size = embedding_size
         self.embedding = Embedding(question_vocab_size, word_vector_length)
+        self.reg = reg
         if initial_embedding_weights is not None:
             self.embedding.weight.data.copy_(initial_embedding_weights)
         self.gru = GRU(word_vector_length, embedding_size)
@@ -92,7 +92,13 @@ class Network(nn.Module):
         self.v_ght = GatedHyperbolicTangent(image_features_size, embedding_size)
         # output ght
         self.output_ght = GatedHyperbolicTangent(embedding_size, embedding_size)
-        self.dropout = Dropout(p=0.2)
+        if reg:
+            # some reg layers
+            self.batch_norm1, self.batch_norm2 = BatchNorm1d(image_location_number), BatchNorm1d(
+                image_features_size)
+            self.dropout = Dropout(p=0.5)
+
+        # output
         self.output_modified = initial_output_embed_weights is not None
         if self.output_modified:
             self.output_image_ght = GatedHyperbolicTangent(embedding_size, 2048)
@@ -102,7 +108,6 @@ class Network(nn.Module):
             self.output_text = Linear(300, answer_vocab_size)
             self.output_text.weight.copy_(initial_output_embed_weights)
         else:
-            # output
             self.output = Linear(embedding_size, answer_vocab_size)
 
     def forward(self, question, image):
@@ -111,6 +116,7 @@ class Network(nn.Module):
             question)  # size = (batch size, max sentence length, word_vector_length = 300)
         out, hidden = self.gru(question_vectors.permute(1, 0, 2))
         hidden = hidden[-1]  # size = (batch size, embedding size = 512)
+        # hidden = out[-1]
         # print_size("hidden", hidden)
         # image embedding
         # dim = -1 ?
@@ -124,12 +130,16 @@ class Network(nn.Module):
                                     -1)  # size = (batch size, image location number, embedding size + image features size)
         # print_size("fusion features1", fusion_features)
         fusion_features = self.fusion_ght(fusion_features)  # size = (batch size, image location number, embedding size)
+        if self.reg:
+            fusion_features = self.batch_norm1(fusion_features)
         # print_size("fusion features2", fusion_features)
         # attentions
         attentions = self.attention_layer(fusion_features)
         attentions = F.softmax(attentions.squeeze())  # size = (batch size, image location number)
         temp = attentions.unsqueeze(1)
         v = torch.bmm(temp, image).squeeze()  # size = (batch size, image features size)
+        if self.reg:
+            v = self.batch_norm2(v)
         # print_size("v", v)
         # joint
         v = self.v_ght(v)
@@ -137,8 +147,10 @@ class Network(nn.Module):
         # can be replaced with *
         h = torch.mul(q, v)  # size = (batch size, embedding size)
         # print_size("h", h)
+        result = h
+        if self.reg:
+            result = self.dropout(result)
         # output
-        result = self.dropout(h)
         if not self.output_modified:
             result = self.output_ght(result)
             result = self.output(result)
@@ -155,12 +167,11 @@ class Network(nn.Module):
 if __name__ == '__main__':
     manual_seed(1000)
     root_path = "/opt/vqa-data"
-    soft_max, modified_output, glove = True, False, True
+    soft_max, modified_output, glove, reg = True, False, True, False
     batch_size = 512
     base_dir = create_batch_dir(batch_size)
-    dataset = VqaDataset(root_path, soft_max)
+    dataset = VqaDataset(root_path, soft_max, type=DataType.ALL)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=cpu_count())
-    print("questions number = " + str(len(dataset)))
     embedding_model_path = "/opt/vqa-data/wiki.en.genism" if not glove else "/opt/vqa-data/gensim_glove_vectors.txt"
     embedding_model = KeyedVectors.load(embedding_model_path) if not glove else KeyedVectors.load_word2vec_format(
         embedding_model_path)
@@ -171,18 +182,18 @@ if __name__ == '__main__':
         t = dataset.answers_vocab()
         initial_output_weights = load_words_embed(embedding_model, t)
         initial_output_images_weights = load_words_images(root_path, t)
-    net = Network(soft_max, dataset.questions_vocab_size + 1, dataset.answers_vocab_size + 1, initial_embed_weights,
+    net = Network(dataset.questions_vocab_size + 1, dataset.answers_vocab_size + 1, initial_embed_weights,
                   initial_output_embed_weights=initial_output_weights,
-                  initial_output_images_weights=initial_output_images_weights)
+                  initial_output_images_weights=initial_output_images_weights, reg=reg)
     net = DataParallel(net).cuda()
     criterion = (BCEWithLogitsLoss() if not soft_max else CrossEntropyLoss()).cuda()
+    # criterion = VqaLoss().cuda()
     optimizer = Adam(net.parameters(), lr=0.01)
-    epochs = 100
+    epochs = 20
     print("begin training")
     batches = dataset.number_of_questions() / batch_size
     for epoch in range(epochs):
-        epoch_loss = 0
-        epoch_correct = 0
+        epoch_loss, epoch_correct = 0, 0
         for batch, (questions, image_features, answers) in enumerate(dataloader, 0):
             questions, image_features, answers = Variable(questions.cuda()), Variable(
                 image_features.cuda()), Variable(answers.cuda())
