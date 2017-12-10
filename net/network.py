@@ -8,13 +8,14 @@ from gensim.models import KeyedVectors
 from torch.autograd import Variable
 from torch.cuda import manual_seed
 from torch.nn import GRU, Linear, Embedding, DataParallel, Dropout, BatchNorm1d, BCEWithLogitsLoss, CrossEntropyLoss
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 from torch.utils.data import DataLoader
 
 from dataset.vqa_dataset import VqaDataset, DataType
 from embedder.image_embedder import ImageEmbedder
 from embedder.sentence_embedder import SentenceEmbedder
 from net.gated_hyperbolic_tangent import GatedHyperbolicTangent
+from net.vqa_loss import VqaLoss
 from util.preprocess import to_module, save_checkpoint
 
 
@@ -188,7 +189,7 @@ if __name__ == '__main__':
     net = DataParallel(net).cuda()
     criterion = (BCEWithLogitsLoss() if not soft_max else CrossEntropyLoss()).cuda()
     # criterion = VqaLoss().cuda()
-    optimizer = Adam(net.parameters(), lr=0.01)
+    optimizer = SGD(net.parameters(), lr=0.01, momentum=0.5)
     epochs = 20
     print("begin training")
     batches = dataset.number_of_questions() / batch_size

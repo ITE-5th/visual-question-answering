@@ -2,6 +2,7 @@ import json
 import os
 import pickle
 from enum import Enum
+from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import torch
@@ -42,6 +43,11 @@ class VqaDataset(Dataset):
             with open("{}/vqa_val_final.json".format(root_path), "r") as f:
                 temp = json.load(f)
                 self.questions += [self.extract_question_features(question) for question in temp]
+        self.length = len(self.questions)
+        with Pool(cpu_count()) as p:
+            self.features = p.map(self.extract_features, list(range(self.length)))
+            p.close()
+            p.join()
         print("finish questions extraction")
         print("questions = {}".format(len(self.questions)))
         self.images_path = root_path + "/images/"
@@ -50,9 +56,12 @@ class VqaDataset(Dataset):
         print("finish images extraction")
 
     def __len__(self):
-        return len(self.questions)
+        return self.length
 
     def __getitem__(self, index):
+        return self.features[index]
+
+    def extract_features(self, index):
         question = self.questions[index]
         image_feature = self.images_features[question[1]]
         return question[0], image_feature, question[2]
