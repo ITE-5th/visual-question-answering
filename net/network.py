@@ -8,14 +8,14 @@ from gensim.models import KeyedVectors
 from torch.autograd import Variable
 from torch.cuda import manual_seed
 from torch.nn import GRU, Linear, Embedding, DataParallel, Dropout, BatchNorm1d, BCEWithLogitsLoss, CrossEntropyLoss
-from torch.optim import Adadelta
+from torch.optim import Adam
 from torch.utils.data import DataLoader
 
 from dataset.vqa_dataset import VqaDataset, DataType
 from embedder.image_embedder import ImageEmbedder
 from embedder.sentence_embedder import SentenceEmbedder
 from net.gated_hyperbolic_tangent import GatedHyperbolicTangent
-from util.preprocess import to_module, save_checkpoint, print_size
+from util.preprocess import to_module, save_checkpoint
 
 
 def create_batch_dir(batch_size: int, base_dir: str = "../models"):
@@ -59,7 +59,7 @@ def load_words_embed(pretrained_embed_model, vocab) -> torch.FloatTensor:
     embeds[0, :] = torch.zeros(1, 300)
     for i in range(2, l + 2):
         try:
-            embeds[i, :] = torch.from_numpy(pretrained_embed_model[vocab[i]]).view(1, 300)
+            embeds[i, :] = torch.from_numpy(pretrained_embed_model[vocab[i - 2]]).view(1, 300)
         except:
             embeds[i, :] = torch.zeros(1, 300)
     return embeds
@@ -76,7 +76,7 @@ class Network(nn.Module):
                  initial_embedding_weights=None,
                  word_vector_length: int = 300,
                  image_location_number: int = 36, image_features_size: int = 2048, embedding_size: int = 512,
-                 initial_output_embed_weights=None, initial_output_images_weights=None, reg: bool = True):
+                 initial_output_embed_weights=None, initial_output_images_weights=None, reg: bool = False):
         super().__init__()
         self.image_location_number = image_location_number
         self.question_max_length = question_max_length
@@ -214,7 +214,7 @@ if __name__ == '__main__':
     net = DataParallel(net).cuda()
     criterion = (BCEWithLogitsLoss() if not soft_max else CrossEntropyLoss()).cuda()
     # criterion = VqaLoss().cuda()
-    optimizer = Adadelta(net.parameters(), lr=0.001)
+    optimizer = Adam(filter(lambda x: x.requires_grad, net.parameters()), lr=0.01)
     epochs = 20
     print("begin training")
     batches = dataset.number_of_questions() / batch_size
@@ -238,9 +238,6 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            if batch % 40 == 0:
-                print('Epoch %02d(%03d/%03d), loss: %.3f, correct: %3d / %d (%.2f%%)' %
-                      (epoch + 1, batch, batches, loss.data[0], correct, batch_size, correct * 100 / batch_size))
         save_checkpoint({
             'epoch': epoch + 1,
             'state_dict': net.state_dict(),
