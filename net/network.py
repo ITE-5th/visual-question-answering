@@ -55,12 +55,13 @@ def predict(net, info, question, image_path):
 
 def load_words_embed(pretrained_embed_model, vocab) -> torch.FloatTensor:
     l = len(vocab)
-    embeds = torch.zeros(l + 1, 300)
-    for i in range(l):
+    embeds = torch.randn(l + 2, 300)
+    embeds[0, :] = torch.zeros(1, 300)
+    for i in range(2, l + 2):
         try:
-            embeds[i + 1, :] = torch.from_numpy(pretrained_embed_model[vocab[i]]).view(1, 300)
+            embeds[i, :] = torch.from_numpy(pretrained_embed_model[vocab[i]]).view(1, 300)
         except:
-            embeds[i + 1, :] = torch.zeros(1, 300)
+            embeds[i, :] = torch.zeros(1, 300)
     return embeds
 
 
@@ -133,6 +134,7 @@ class Network(nn.Module):
         return self.out(h)
 
     def question_embedding(self, question):
+        print_size("question", question)
         question_vectors = self.embedding(
             question)  # size = (batch size, number of words for each sentence, word vector length = 300)
         print_size("question vectors", question_vectors)
@@ -209,7 +211,7 @@ if __name__ == '__main__':
         t = dataset.answers_vocab()
         initial_output_weights = load_words_embed(embedding_model, t)
         initial_output_images_weights = load_words_images(root_path, t)
-    net = Network(dataset.questions_vocab_size + 1, dataset.answers_vocab_size + 1, initial_embed_weights,
+    net = Network(dataset.questions_vocab_size + 2, dataset.answers_vocab_size + 1, initial_embed_weights,
                   initial_output_embed_weights=initial_output_weights,
                   initial_output_images_weights=initial_output_images_weights, reg=reg)
     net = DataParallel(net).cuda()
