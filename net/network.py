@@ -8,15 +8,14 @@ from gensim.models import KeyedVectors
 from torch.autograd import Variable
 from torch.cuda import manual_seed
 from torch.nn import GRU, Linear, Embedding, DataParallel, Dropout, BatchNorm1d, BCEWithLogitsLoss, CrossEntropyLoss
-from torch.optim import Adam, SGD
+from torch.optim import Adadelta
 from torch.utils.data import DataLoader
 
 from dataset.vqa_dataset import VqaDataset, DataType
 from embedder.image_embedder import ImageEmbedder
 from embedder.sentence_embedder import SentenceEmbedder
 from net.gated_hyperbolic_tangent import GatedHyperbolicTangent
-from net.vqa_loss import VqaLoss
-from util.preprocess import to_module, save_checkpoint
+from util.preprocess import to_module, save_checkpoint, print_size
 
 
 def create_batch_dir(batch_size: int, base_dir: str = "../models"):
@@ -72,13 +71,16 @@ def load_words_images(root_path: str, vocabs) -> torch.FloatTensor:
 
 
 class Network(nn.Module):
-    def __init__(self, question_vocab_size: int, answer_vocab_size: int, initial_embedding_weights=None,
+    def __init__(self, question_vocab_size: int, answer_vocab_size: int, question_max_length: int = 14,
+                 initial_embedding_weights=None,
                  word_vector_length: int = 300,
                  image_location_number: int = 36, image_features_size: int = 2048, embedding_size: int = 512,
                  initial_output_embed_weights=None, initial_output_images_weights=None, reg: bool = True):
         super().__init__()
         self.image_location_number = image_location_number
+        self.question_max_length = question_max_length
         self.embedding_size = embedding_size
+        self.word_vector_length = word_vector_length
         self.embedding = Embedding(question_vocab_size, word_vector_length)
         self.reg = reg
         if initial_embedding_weights is not None:
@@ -112,16 +114,36 @@ class Network(nn.Module):
             self.output = Linear(embedding_size, answer_vocab_size)
 
     def forward(self, question, image):
+        question = question[question != -1]
         # sentence embedding
+        hidden = self.question_embedding(question)
+        q = self.question_ght(hidden)
+        # image embedding
+        image = F.normalize(image)
+        # fused features
+        fusion_features = self.fusion(hidden, image)
+        # attentions
+        v = self.attentions(fusion_features, image)
+        # can be replaced with *
+        # joint
+        h = torch.mul(q, v)  # size = (batch size, embedding size)
+        if self.reg:
+            h = self.dropout(h)
+        # output
+        return self.out(h)
+
+    def question_embedding(self, question):
         question_vectors = self.embedding(
-            question)  # size = (batch size, max sentence length, word_vector_length = 300)
+            question)  # size = (batch size, number of words for each sentence, word vector length = 300)
+        print_size("question vectors", question_vectors)
+        question_vectors = self.pad_input(
+            question_vectors)  # size = (batch size, max question length, word vector length)
         out, hidden = self.gru(question_vectors.permute(1, 0, 2))
         hidden = hidden[-1]  # size = (batch size, embedding size = 512)
         # hidden = out[-1]
-        # print_size("hidden", hidden)
-        # image embedding
-        # dim = -1 ?
-        image = F.normalize(image)
+        return hidden
+
+    def fusion(self, hidden, image):
         # concat
         hidden_mat = hidden.repeat(1,
                                    self.image_location_number)  # size = (batch size, image location number * embedding size)
@@ -133,36 +155,40 @@ class Network(nn.Module):
         fusion_features = self.fusion_ght(fusion_features)  # size = (batch size, image location number, embedding size)
         if self.reg:
             fusion_features = self.batch_norm1(fusion_features)
-        # print_size("fusion features2", fusion_features)
-        # attentions
+        return fusion_features
+
+    def attentions(self, fusion_features, image):
         attentions = self.attention_layer(fusion_features)
         attentions = F.softmax(attentions.squeeze())  # size = (batch size, image location number)
         temp = attentions.unsqueeze(1)
         v = torch.bmm(temp, image).squeeze()  # size = (batch size, image features size)
         if self.reg:
             v = self.batch_norm2(v)
-        # print_size("v", v)
-        # joint
         v = self.v_ght(v)
-        q = self.question_ght(hidden)
-        # can be replaced with *
-        h = torch.mul(q, v)  # size = (batch size, embedding size)
-        # print_size("h", h)
-        result = h
-        if self.reg:
-            result = self.dropout(result)
-        # output
+        return v
+
+    def out(self, h):
         if not self.output_modified:
-            result = self.output_ght(result)
-            result = self.output(result)
+            h = self.output_ght(h)
+            h = self.output(h)
         else:
-            im = self.output_image_ght(result)
-            im = self.output_image(im)
-            text = self.output_text_ght(result)
+            image = self.output_image_ght(h)
+            image = self.output_image(image)
+            text = self.output_text_ght(h)
             text = self.output_text(text)
-            result = im + text
-        # print_size("result", result)
-        return result
+            h = image + text
+        return h
+
+    def pad_input(self, x):
+        for i in range(x.size(0)):
+            question = x[i, :, :]
+            padding_size = self.question_max_length - question.size(0)
+            if padding_size > 0:
+                question = torch.cat((question, torch.zeros(padding_size, self.word_vector_length)))
+            elif padding_size < 0:
+                question = question[:self.question_max_length, :]
+            x[i, :, :] = question
+        return x
 
 
 if __name__ == '__main__':
@@ -189,7 +215,7 @@ if __name__ == '__main__':
     net = DataParallel(net).cuda()
     criterion = (BCEWithLogitsLoss() if not soft_max else CrossEntropyLoss()).cuda()
     # criterion = VqaLoss().cuda()
-    optimizer = SGD(net.parameters(), lr=0.01, momentum=0.5)
+    optimizer = Adadelta(net.parameters(), lr=0.001)
     epochs = 20
     print("begin training")
     batches = dataset.number_of_questions() / batch_size

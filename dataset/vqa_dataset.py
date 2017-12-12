@@ -17,10 +17,10 @@ class DataType(Enum):
 
 class VqaDataset(Dataset):
     def __init__(self, root_path: str, soft_max: bool = False, type: DataType = DataType.TRAIN,
-                 question_length: int = 14):
+                 question_max_length: int = 20):
         self.soft_max = soft_max
         self.type = type
-        self.question_length = question_length
+        self.question_max_length = question_max_length
         with open("{}/train_q_dict.p".format(root_path), "rb") as f:
             temp = pickle.load(f)
             self.questions_indices_to_words = temp["itow"]
@@ -32,7 +32,7 @@ class VqaDataset(Dataset):
             self.answers_words_to_indices = temp["wtoi"]
             self.answers_vocab_size = len(self.answers_indices_to_words)
         print("finish word to indices extraction")
-        if self.type == DataType.TRAIN or self.type == DataType.TRAIN:
+        if self.type == DataType.TRAIN or self.type == DataType.TEST:
             with open("{}/vqa_{}_final.json".format(root_path, "train" if type == DataType.TRAIN else "val"), "r") as f:
                 self.questions = json.load(f)
                 self.questions = [self.extract_question_features(question) for question in self.questions]
@@ -43,17 +43,17 @@ class VqaDataset(Dataset):
             with open("{}/vqa_val_final.json".format(root_path), "r") as f:
                 temp = json.load(f)
                 self.questions += [self.extract_question_features(question) for question in temp]
-        self.length = len(self.questions)
-        with Pool(cpu_count()) as p:
-            self.features = p.map(self.extract_features, list(range(self.length)))
-            p.close()
-            p.join()
         print("finish questions extraction")
         print("questions = {}".format(len(self.questions)))
         self.images_path = root_path + "/images/"
         image_ids = [path[:path.rfind(".")] for path in os.listdir(self.images_path)]
         self.images_features = {int(image_id): self.extract_image_features(image_id) for image_id in image_ids}
         print("finish images extraction")
+        self.length = len(self.questions)
+        self.features = []
+        for i in range(self.length):
+            self.features.append(self.extract_features(i))
+        print("finish all features extraction")
 
     def __len__(self):
         return self.length
@@ -67,7 +67,7 @@ class VqaDataset(Dataset):
         return question[0], image_feature, question[2]
 
     def extract_question_features(self, question):
-        question_indices = [0] * self.question_length
+        question_indices = [-1] * self.question_max_length
         for i, word in enumerate(question["question_toked"]):
             try:
                 question_indices[i] = self.questions_words_to_indices[word]
