@@ -133,12 +133,10 @@ class Network(nn.Module):
         return self.out(h)
 
     def question_embedding(self, question):
-        print_size("question", question)
         question_vectors = self.embedding(
             question)  # size = (batch size, number of words for each sentence, word vector length = 300)
-        print_size("question vectors", question_vectors)
-        question_vectors = self.pad_input(
-            question_vectors)  # size = (batch size, max question length, word vector length)
+        # question_vectors = self.pad_input(
+        #     question_vectors)  # size = (batch size, max question length, word vector length)
         out, hidden = self.gru(question_vectors.permute(1, 0, 2))
         hidden = hidden[-1]  # size = (batch size, embedding size = 512)
         # hidden = out[-1]
@@ -182,13 +180,13 @@ class Network(nn.Module):
 
     def pad_input(self, x):
         for i in range(x.size(0)):
-            question = x[i, :, :]
+            question = x[i]
             padding_size = self.question_max_length - question.size(0)
             if padding_size > 0:
                 question = torch.cat((question, torch.zeros(padding_size, self.word_vector_length)))
             elif padding_size < 0:
                 question = question[:self.question_max_length, :]
-            x[i, :, :] = question
+            x[i] = question
         return x
 
 
