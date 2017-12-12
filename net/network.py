@@ -115,7 +115,6 @@ class Network(nn.Module):
             self.output = Linear(embedding_size, answer_vocab_size)
 
     def forward(self, question, image):
-        question = question[question != -1]
         # sentence embedding
         hidden = self.question_embedding(question)
         q = self.question_ght(hidden)
