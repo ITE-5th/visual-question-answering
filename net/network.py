@@ -55,11 +55,10 @@ def predict(net, info, question, image_path):
 
 def load_words_embed(pretrained_embed_model, vocab) -> torch.FloatTensor:
     l = len(vocab)
-    embeds = torch.randn(l + 2, 300)
-    embeds[0, :] = torch.zeros(1, 300)
-    for i in range(2, l + 2):
+    embeds = torch.randn(l + 1, 300)
+    for i in range(1, l + 1):
         try:
-            embeds[i, :] = torch.from_numpy(pretrained_embed_model[vocab[i - 2]]).view(1, 300)
+            embeds[i, :] = torch.from_numpy(pretrained_embed_model[vocab[i - 1]]).view(1, 300)
         except:
             embeds[i, :] = torch.zeros(1, 300)
     return embeds
@@ -82,7 +81,7 @@ class Network(nn.Module):
         self.question_max_length = question_max_length
         self.embedding_size = embedding_size
         self.word_vector_length = word_vector_length
-        self.embedding = Embedding(question_vocab_size, word_vector_length)
+        self.embedding = Embedding(question_vocab_size, word_vector_length, padding_idx=-1)
         self.reg = reg
         if initial_embedding_weights is not None:
             self.embedding.weight.data.copy_(initial_embedding_weights)
@@ -208,13 +207,13 @@ if __name__ == '__main__':
         t = dataset.answers_vocab()
         initial_output_weights = load_words_embed(embedding_model, t)
         initial_output_images_weights = load_words_images(root_path, t)
-    net = Network(dataset.questions_vocab_size + 2, dataset.answers_vocab_size + 1, initial_embed_weights,
+    net = Network(dataset.questions_vocab_size + 1, dataset.answers_vocab_size + 1, initial_embed_weights,
                   initial_output_embed_weights=initial_output_weights,
                   initial_output_images_weights=initial_output_images_weights, reg=reg)
     net = DataParallel(net).cuda()
     criterion = (BCEWithLogitsLoss() if not soft_max else CrossEntropyLoss()).cuda()
     # criterion = VqaLoss().cuda()
-    optimizer = Adam(filter(lambda x: x.requires_grad, net.parameters()), lr=0.01)
+    optimizer = Adam(filter(lambda x: x.requires_grad, net.parameters()), lr=0.001)
     epochs = 20
     print("begin training")
     batches = dataset.number_of_questions() / batch_size

@@ -67,12 +67,12 @@ class VqaDataset(Dataset):
         return question[0], image_feature, question[2]
 
     def extract_question_features(self, question):
-        question_indices = [0] * self.question_max_length
+        question_indices = [-1] * self.question_max_length
         for i, word in enumerate(question["question_toked"]):
             try:
-                question_indices[i] = self.questions_words_to_indices[word] + 1
+                question_indices[i] = self.questions_words_to_indices[word]
             except:
-                question_indices[i] = 1
+                question_indices[i] = 0
         if not self.soft_max:
             answers = [0] * (self.answers_vocab_size + 1)
             temp = question["answers_w_scores"]
