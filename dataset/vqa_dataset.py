@@ -17,7 +17,7 @@ class DataType(Enum):
 
 class VqaDataset(Dataset):
     def __init__(self, root_path: str, soft_max: bool = False, type: DataType = DataType.TRAIN,
-                 question_max_length: int = 20):
+                 question_max_length: int = 14):
         self.soft_max = soft_max
         self.type = type
         self.question_max_length = question_max_length
@@ -43,7 +43,6 @@ class VqaDataset(Dataset):
             with open("{}/vqa_val_final.json".format(root_path), "r") as f:
                 temp = json.load(f)
                 self.questions += [self.extract_question_features(question) for question in temp]
-        print("finish questions extraction")
         print("questions = {}".format(len(self.questions)))
         self.images_path = root_path + "/images/"
         image_ids = [path[:path.rfind(".")] for path in os.listdir(self.images_path)]
@@ -99,9 +98,6 @@ class VqaDataset(Dataset):
 
     def answers_vocab(self):
         return list(self.answers_words_to_indices.keys())
-
-    def dispose(self):
-        del self.images_path, self.answers_words_to_indices, self.answers_indices_to_words, self.questions_indices_to_words, self.questions_words_to_indices, self.questions_vocab_size
 
     @staticmethod
     def load_eval_info(root_dir: str):

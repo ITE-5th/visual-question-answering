@@ -9,6 +9,8 @@ class GatedHyperbolicTangent(Module):
         self.linear1, self.linear2 = Linear(in_features, out_features), Linear(in_features, out_features)
 
     def forward(self, x):
-        y = F.tanh(self.linear1(x))
-        g = F.sigmoid(self.linear2(x))
+        y = self.linear1(x)
+        y = F.tanh(y)
+        g = self.linear2(x)
+        g = F.sigmoid(g)
         return torch.mul(y, g)

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from gensim.models import KeyedVectors
 from torch.autograd import Variable
 from torch.cuda import manual_seed
-from torch.nn import GRU, Linear, Embedding, DataParallel, Dropout, BatchNorm1d, BCEWithLogitsLoss, CrossEntropyLoss
+from torch.nn import GRU, Linear, Embedding, Dropout, BatchNorm1d, BCEWithLogitsLoss, CrossEntropyLoss
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 
@@ -31,7 +31,6 @@ def load(model_path: str, info, use_cuda=True):
     state = to_module(state)
     net = Network(info["question_vocab_size"] + 1, info["answer_vocab_size"] + 1)
     net.load_state_dict(state)
-    net = DataParallel(net)
     if use_cuda:
         net = net.cuda()
     net.eval()
@@ -86,11 +85,11 @@ class Network(nn.Module):
         if initial_embedding_weights is not None:
             self.embedding.weight.data.copy_(initial_embedding_weights)
         self.gru = GRU(word_vector_length, embedding_size)
+        # question ght
+        self.question_ght = GatedHyperbolicTangent(embedding_size, embedding_size)
         # fusion feature ght
         self.fusion_ght = GatedHyperbolicTangent(embedding_size + image_features_size, embedding_size)
         self.attention_layer = Linear(embedding_size, 1)
-        # question ght
-        self.question_ght = GatedHyperbolicTangent(embedding_size, embedding_size)
         # attention result ght
         self.v_ght = GatedHyperbolicTangent(image_features_size, embedding_size)
         # output ght
@@ -104,25 +103,25 @@ class Network(nn.Module):
         # output
         self.output_modified = initial_output_embed_weights is not None
         if self.output_modified:
-            self.output_image_ght = GatedHyperbolicTangent(embedding_size, 2048)
-            self.output_image = Linear(2048, answer_vocab_size)
+            self.output_image_ght = GatedHyperbolicTangent(embedding_size, image_features_size)
+            self.output_image = Linear(image_features_size, answer_vocab_size)
             self.output_image.weight.copy_(initial_output_images_weights)
-            self.output_text_ght = GatedHyperbolicTangent(embedding_size, 300)
-            self.output_text = Linear(300, answer_vocab_size)
+            self.output_text_ght = GatedHyperbolicTangent(embedding_size, word_vector_length)
+            self.output_text = Linear(word_vector_length, answer_vocab_size)
             self.output_text.weight.copy_(initial_output_embed_weights)
         else:
             self.output = Linear(embedding_size, answer_vocab_size)
 
     def forward(self, question, image):
         # sentence embedding
-        hidden = self.question_embedding(question)
+        hidden = self.embed_question(question)
         q = self.question_ght(hidden)
         # image embedding
-        image = F.normalize(image)
+        image = F.normalize(image, dim=-1)
         # fused features
         fusion_features = self.fusion(hidden, image)
         # attentions
-        v = self.attentions(fusion_features, image)
+        v = self.attent(fusion_features, image)
         # can be replaced with *
         # joint
         h = torch.mul(q, v)  # size = (batch size, embedding size)
@@ -131,14 +130,11 @@ class Network(nn.Module):
         # output
         return self.out(h)
 
-    def question_embedding(self, question):
+    def embed_question(self, question):
         question_vectors = self.embedding(
-            question)  # size = (batch size, number of words for each sentence, word vector length = 300)
-        # question_vectors = self.pad_input(
-        #     question_vectors)  # size = (batch size, max question length, word vector length)
+            question)  # size = (batch size, max question length, word vector length = 300)
         out, hidden = self.gru(question_vectors.permute(1, 0, 2))
         hidden = hidden[-1]  # size = (batch size, embedding size = 512)
-        # hidden = out[-1]
         return hidden
 
     def fusion(self, hidden, image):
@@ -155,9 +151,9 @@ class Network(nn.Module):
             fusion_features = self.batch_norm1(fusion_features)
         return fusion_features
 
-    def attentions(self, fusion_features, image):
+    def attent(self, fusion_features, image):
         attentions = self.attention_layer(fusion_features)
-        attentions = F.softmax(attentions.squeeze())  # size = (batch size, image location number)
+        attentions = F.softmax(attentions.squeeze(), dim=-1)  # size = (batch size, image location number)
         temp = attentions.unsqueeze(1)
         v = torch.bmm(temp, image).squeeze()  # size = (batch size, image features size)
         if self.reg:
@@ -177,25 +173,15 @@ class Network(nn.Module):
             h = image + text
         return h
 
-    def pad_input(self, x):
-        for i in range(x.size(0)):
-            question = x[i]
-            padding_size = self.question_max_length - question.size(0)
-            if padding_size > 0:
-                question = torch.cat((question, torch.zeros(padding_size, self.word_vector_length)))
-            elif padding_size < 0:
-                question = question[:self.question_max_length, :]
-            x[i] = question
-        return x
-
 
 if __name__ == '__main__':
     manual_seed(1000)
     root_path = "/opt/vqa-data"
+    max_question_length = 14
     soft_max, modified_output, glove, reg = True, False, True, False
     batch_size = 512
     base_dir = create_batch_dir(batch_size)
-    dataset = VqaDataset(root_path, soft_max, type=DataType.ALL)
+    dataset = VqaDataset(root_path, soft_max, type=DataType.ALL, question_max_length=max_question_length)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=cpu_count())
     embedding_model_path = "/opt/vqa-data/wiki.en.genism" if not glove else "/opt/vqa-data/gensim_glove_vectors.txt"
     embedding_model = KeyedVectors.load(embedding_model_path) if not glove else KeyedVectors.load_word2vec_format(
@@ -207,10 +193,14 @@ if __name__ == '__main__':
         t = dataset.answers_vocab()
         initial_output_weights = load_words_embed(embedding_model, t)
         initial_output_images_weights = load_words_images(root_path, t)
-    net = Network(dataset.questions_vocab_size + 1, dataset.answers_vocab_size + 1, initial_embed_weights,
+    net = Network(dataset.questions_vocab_size + 1,
+                  dataset.answers_vocab_size + 1,
+                  question_max_length=max_question_length,
+                  initial_embedding_weights=initial_embed_weights,
                   initial_output_embed_weights=initial_output_weights,
-                  initial_output_images_weights=initial_output_images_weights, reg=reg)
-    net = DataParallel(net).cuda()
+                  initial_output_images_weights=initial_output_images_weights,
+                  reg=reg)
+    net = net.cuda()
     criterion = (BCEWithLogitsLoss() if not soft_max else CrossEntropyLoss()).cuda()
     # criterion = VqaLoss().cuda()
     optimizer = Adam(filter(lambda x: x.requires_grad, net.parameters()), lr=0.001)
